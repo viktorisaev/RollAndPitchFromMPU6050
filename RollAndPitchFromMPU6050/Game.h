@@ -120,4 +120,17 @@ private:
 	// data produced by MPU6050 accelerometer
 	AccelData m_AccelData;
 
+	// model DirectXTK
+	std::unique_ptr<DirectX::GraphicsMemory> m_graphicsMemory;
+
+	DirectX::SimpleMath::Matrix m_world;
+	DirectX::SimpleMath::Matrix m_view;
+	DirectX::SimpleMath::Matrix m_proj;
+
+	std::unique_ptr<DirectX::CommonStates> m_states;
+	std::unique_ptr<DirectX::EffectFactory> m_fxFactory;
+	std::unique_ptr<DirectX::EffectTextureFactory> m_modelResources;
+	std::unique_ptr<DirectX::Model> m_model;
+	std::vector<std::shared_ptr<DirectX::IEffect>> m_modelNormal;
+
 };

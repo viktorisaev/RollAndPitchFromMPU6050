@@ -12,6 +12,7 @@ using Microsoft::WRL::ComPtr;
 using namespace Platform;
 using namespace Windows::Foundation;
 using namespace DirectX;
+using namespace DirectX::SimpleMath;
 
 extern void ExitGame();
 
@@ -134,8 +135,11 @@ void Game::Update(DX::StepTimer const& timer)
     float elapsedTime = float(timer.GetElapsedSeconds());
 
 	// use MPU6050 accelerometer data in render
-	m_AngleRoll = m_AccelData.accelX;
-	m_AnglePitch = m_AccelData.accelY;
+	m_AngleRoll = m_AccelData.accelY;
+	m_AnglePitch = -m_AccelData.accelX;
+
+	// calculate model rotation matrix
+	m_world = Matrix::CreateFromYawPitchRoll(0.0f, m_AnglePitch, m_AngleRoll);
 }
 
 
@@ -153,20 +157,33 @@ void Game::Render()
     Clear();
 
 
+	// model DirectXTK
+	Model::UpdateEffectMatrices(m_modelNormal, m_world, m_view, m_proj);
+	m_model->Draw(m_commandList.Get(), m_modelNormal.cbegin());
+
+
 	// imgui - show render details
 	ImGui_ImplDX12_NewFrame(m_commandList.Get(), m_outputWidth, m_outputHeight);
 
-	constexpr float INFO_WINDOW_WIDTH = 340.0f;
-	constexpr float INFO_WINDOW_HEIGHT = 120.0f;
+	constexpr float INFO_WINDOW_WIDTH = 260.0f;
+	constexpr float INFO_WINDOW_HEIGHT = 80.0f;
 
 	// put debug window at center bottom position
-	ImGui::SetNextWindowPos(ImVec2((m_outputWidth - INFO_WINDOW_WIDTH) / 2, m_outputHeight - INFO_WINDOW_HEIGHT), ImGuiSetCond_FirstUseEver);
+	ImGui::SetNextWindowPos(ImVec2((0) / 2, m_outputHeight - INFO_WINDOW_HEIGHT), ImGuiSetCond_FirstUseEver);
+	ImGui::SetNextWindowSize(ImVec2(INFO_WINDOW_WIDTH, INFO_WINDOW_HEIGHT), ImGuiSetCond_FirstUseEver);
+
+	// put data to display
+	ImGui::Begin("Performance");
+	ImGui::Text("FPS=%.1f", ImGui::GetIO().Framerate);
+	ImGui::Text("Accel reads/sec %.1f", float(m_AccelerometerReads / m_timer.GetTotalSeconds()));
+	ImGui::End();
+
+	// put debug window at center bottom position
+	ImGui::SetNextWindowPos(ImVec2(m_outputWidth - INFO_WINDOW_WIDTH, m_outputHeight - INFO_WINDOW_HEIGHT), ImGuiSetCond_FirstUseEver);
 	ImGui::SetNextWindowSize(ImVec2(INFO_WINDOW_WIDTH, INFO_WINDOW_HEIGHT), ImGuiSetCond_FirstUseEver);
 
 	// put data to display
 	ImGui::Begin("Accelerometer");
-	ImGui::Text("FPS=%.1f", ImGui::GetIO().Framerate);
-	ImGui::Text("Accelerometer reads per second %.1f", float(m_AccelerometerReads / m_timer.GetTotalSeconds()));
 	ImGui::SliderFloat("Roll angle", &m_AngleRoll, -1.0f, 1.0f);
 	ImGui::SliderFloat("Pitch angle", &m_AnglePitch, -1.0f, 1.0f);
 	ImGui::End();
@@ -178,6 +195,7 @@ void Game::Render()
 
     // Show the new frame.
     Present();
+	m_graphicsMemory->Commit(m_commandQueue.Get());
 }
 
 // Helper method to prepare the command list for rendering and clear the back buffers.
@@ -402,6 +420,35 @@ void Game::CreateDevice()
         throw std::exception("CreateEvent");
     }
 
+	// model DirectXTK
+	m_graphicsMemory = std::make_unique<GraphicsMemory>(m_d3dDevice.Get());
+
+	m_states = std::make_unique<CommonStates>(m_d3dDevice.Get());
+
+	m_model = Model::CreateFromSDKMESH(L"Assets/airplane.sdkmesh");	// load the model
+
+	ResourceUploadBatch resourceUpload(m_d3dDevice.Get());
+
+	resourceUpload.Begin();
+
+	m_modelResources = m_model->LoadTextures(m_d3dDevice.Get(), resourceUpload);
+
+	//	m_fxFactory = std::make_unique<EffectFactory>(m_modelResources->Heap(), m_states->Heap());
+	m_fxFactory = std::make_unique<EffectFactory>(m_d3dDevice.Get());
+
+	auto uploadResourcesFinished = resourceUpload.End(m_commandQueue.Get());
+
+	uploadResourcesFinished.wait();
+
+	RenderTargetState rtState(DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_D32_FLOAT);
+	EffectPipelineStateDescription pd(nullptr, CommonStates::Opaque, CommonStates::DepthDefault, CommonStates::CullClockwise, rtState);
+	EffectPipelineStateDescription pdAlpha(nullptr, CommonStates::AlphaBlend, CommonStates::DepthDefault, CommonStates::CullClockwise, rtState);
+
+	m_modelNormal = m_model->CreateEffects(*m_fxFactory, pd, pdAlpha);
+
+	m_world = Matrix::Identity;
+
+
 	// imgui
 	D3D12_DESCRIPTOR_HEAP_DESC desc = {};
 	desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -532,7 +579,9 @@ void Game::CreateResources()
 
     m_d3dDevice->CreateDepthStencilView(m_depthStencil.Get(), &dsvDesc, m_dsvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
 
-    // TODO: Initialize windows-size dependent objects here.
+	// model DirectXTK
+	m_view = Matrix::CreateLookAt(Vector3(0.f, 4.5f, -24.f), Vector3(0.f, -1.0f, 0.0f), Vector3::UnitY);
+	m_proj = Matrix::CreatePerspectiveFieldOfView(XM_PI / 4.f, float(backBufferWidth) / float(backBufferHeight), 0.1f, 1000.f);
 }
 
 void Game::WaitForGpu()
@@ -613,7 +662,13 @@ void Game::GetAdapter(IDXGIAdapter1** ppAdapter)
 
 void Game::OnDeviceLost()
 {
-    // TODO: Perform Direct3D resource cleanup.
+	// DirectXTK
+	m_states.reset();
+	m_fxFactory.reset();
+	m_modelResources.reset();
+	m_model.reset();
+	m_modelNormal.clear();
+	m_graphicsMemory.reset();
 
     for (UINT n = 0; n < c_swapBufferCount; n++)
     {
@@ -693,7 +748,7 @@ Concurrency::task<bool> Game::InitMPU6050()
 								return false;
 							}
 
-							if (!WriteByteToI2C(m_I2cMPU6050Device, 0x1A, 3))		// Accelerometer= 44Hz
+							if (!WriteByteToI2C(m_I2cMPU6050Device, 0x1A, 4))		// Accelerometer= 21Hz
 							{
 								return false;
 							}

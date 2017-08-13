@@ -79,5 +79,9 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="RollAndPitchFromMPU6050_TemporaryKey.pfx" />
+    <None Include="Assets\airplane.sdkmesh">
+      <Filter>Assets</Filter>
+    </None>
+    <None Include="packages.config" />
   </ItemGroup>
 </Project>
