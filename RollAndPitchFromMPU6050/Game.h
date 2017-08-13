@@ -78,4 +78,8 @@ private:
 
     // Game state
     DX::StepTimer                                       m_timer;
+
+	// imgui
+	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap>        g_pd3dSrvDescHeap;
+
 };

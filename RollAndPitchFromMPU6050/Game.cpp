@@ -5,6 +5,10 @@
 #include "pch.h"
 #include "Game.h"
 
+#include "imgui.h"
+#include "imgui_impl_dx12.h"
+
+
 extern void ExitGame();
 
 using namespace DirectX;
@@ -73,7 +77,26 @@ void Game::Render()
     // Prepare the command list to render a new frame.
     Clear();
 
-    // TODO: Add your rendering code here.
+
+	// imgui - show render details
+	ImGui_ImplDX12_NewFrame(m_commandList.Get(), m_outputWidth, m_outputHeight);
+
+	constexpr float INFO_WINDOW_WIDTH = 340.0f;
+	constexpr float INFO_WINDOW_HEIGHT = 100.0f;
+
+	// put debug window at center bottom position
+	ImGui::SetNextWindowPos(ImVec2((m_outputWidth - INFO_WINDOW_WIDTH) / 2, m_outputHeight - INFO_WINDOW_HEIGHT), ImGuiSetCond_FirstUseEver);
+	ImGui::SetNextWindowSize(ImVec2(INFO_WINDOW_WIDTH, INFO_WINDOW_HEIGHT), ImGuiSetCond_FirstUseEver);
+
+	// put data to display
+	ImGui::Begin("Accelerometer");
+	ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
+	ImGui::End();
+
+	// render debug window
+	m_commandList.Get()->SetDescriptorHeaps(1, g_pd3dSrvDescHeap.GetAddressOf());
+	ImGui::Render();
+
 
     // Show the new frame.
     Present();
@@ -301,7 +324,15 @@ void Game::CreateDevice()
         throw std::exception("CreateEvent");
     }
 
-    // TODO: Initialize device dependent objects here (independent of window size).
+	// imgui
+	D3D12_DESCRIPTOR_HEAP_DESC desc = {};
+	desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+	desc.NumDescriptors = 1;
+	desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+	m_d3dDevice->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&g_pd3dSrvDescHeap));
+
+	ImGui_ImplDX12_Init(NULL, c_swapBufferCount, m_d3dDevice.Get(), g_pd3dSrvDescHeap.Get()->GetCPUDescriptorHandleForHeapStart(), g_pd3dSrvDescHeap.Get()->GetGPUDescriptorHandleForHeapStart());
+
 }
 
 // Allocate all memory resources that change on a window SizeChanged event.
