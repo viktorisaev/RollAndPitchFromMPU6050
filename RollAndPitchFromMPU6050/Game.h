@@ -6,6 +6,24 @@
 
 #include "StepTimer.h"
 
+#include <collection.h>
+#include <ppltasks.h>
+
+using namespace Concurrency;
+using namespace Windows::System;
+using namespace Windows::Devices::Enumeration;
+using namespace Windows::Devices::I2c;
+
+
+// data from MPU6050
+struct AccelData
+{
+	// accelerometer
+	float accelX;
+	float accelY;
+	float accelZ;
+};
+
 
 // A basic game implementation that creates a D3D12 device and
 // provides a game loop.
@@ -13,73 +31,93 @@ class Game
 {
 public:
 
-    Game();
+	Game();
 
-    // Initialization and management
-    void Initialize(IUnknown* window, int width, int height, DXGI_MODE_ROTATION rotation);
+	// Initialization and management
+	void Initialize(IUnknown* window, int width, int height, DXGI_MODE_ROTATION rotation);
 
-    // Basic game loop
-    void Tick();
+	// Basic game loop
+	void Tick();
 
-    // Messages
-    void OnActivated();
-    void OnDeactivated();
-    void OnSuspending();
-    void OnResuming();
-    void OnWindowSizeChanged(int width, int height, DXGI_MODE_ROTATION rotation);
-    void ValidateDevice();
+	// Messages
+	void OnActivated();
+	void OnDeactivated();
+	void OnSuspending();
+	void OnResuming();
+	void OnWindowSizeChanged(int width, int height, DXGI_MODE_ROTATION rotation);
+	void ValidateDevice();
 
-    // Properties
-    void GetDefaultSize( int& width, int& height ) const;
+	// Properties
+	void GetDefaultSize(int& width, int& height) const;
+
+	// MPU6050
+	Concurrency::task<bool> Game::InitMPU6050();
+	bool Game::WriteByteToI2C(I2cDevice^ _I2cMPU6050Device, byte _regAddr, byte _data);
 
 private:
 
-    void Update(DX::StepTimer const& timer);
-    void Render();
+	void Update(DX::StepTimer const& timer);
+	void Render();
 
-    void Clear();
-    void Present();
+	void Clear();
+	void Present();
 
-    void CreateDevice();
-    void CreateResources();
+	void CreateDevice();
+	void CreateResources();
 
-    void WaitForGpu();
-    void MoveToNextFrame();
-    void GetAdapter(IDXGIAdapter1** ppAdapter);
+	void WaitForGpu();
+	void MoveToNextFrame();
+	void GetAdapter(IDXGIAdapter1** ppAdapter);
 
-    void OnDeviceLost();
+	void OnDeviceLost();
 
-    // Application state
-    IUnknown*                                           m_window;
-    int                                                 m_outputWidth;
-    int                                                 m_outputHeight;
-    DXGI_MODE_ROTATION                                  m_outputRotation;
+	// Application state
+	IUnknown*                                           m_window;
+	int                                                 m_outputWidth;
+	int                                                 m_outputHeight;
+	DXGI_MODE_ROTATION                                  m_outputRotation;
 
-    // Direct3D Objects
-    D3D_FEATURE_LEVEL                                   m_featureLevel;
-    static const UINT                                   c_swapBufferCount = 2;
-    UINT                                                m_backBufferIndex;
-    UINT                                                m_rtvDescriptorSize;
-    Microsoft::WRL::ComPtr<ID3D12Device>                m_d3dDevice;
-    Microsoft::WRL::ComPtr<IDXGIFactory4>               m_dxgiFactory;
-    Microsoft::WRL::ComPtr<ID3D12CommandQueue>          m_commandQueue;
-    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap>        m_rtvDescriptorHeap;
-    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap>        m_dsvDescriptorHeap;
-    Microsoft::WRL::ComPtr<ID3D12CommandAllocator>      m_commandAllocators[c_swapBufferCount];
-    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList>   m_commandList;
-    Microsoft::WRL::ComPtr<ID3D12Fence>                 m_fence;
-    UINT64                                              m_fenceValues[c_swapBufferCount];
-    Microsoft::WRL::Wrappers::Event                     m_fenceEvent;
+	// Direct3D Objects
+	D3D_FEATURE_LEVEL                                   m_featureLevel;
+	static const UINT                                   c_swapBufferCount = 2;
+	UINT                                                m_backBufferIndex;
+	UINT                                                m_rtvDescriptorSize;
+	Microsoft::WRL::ComPtr<ID3D12Device>                m_d3dDevice;
+	Microsoft::WRL::ComPtr<IDXGIFactory4>               m_dxgiFactory;
+	Microsoft::WRL::ComPtr<ID3D12CommandQueue>          m_commandQueue;
+	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap>        m_rtvDescriptorHeap;
+	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap>        m_dsvDescriptorHeap;
+	Microsoft::WRL::ComPtr<ID3D12CommandAllocator>      m_commandAllocators[c_swapBufferCount];
+	Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList>   m_commandList;
+	Microsoft::WRL::ComPtr<ID3D12Fence>                 m_fence;
+	UINT64                                              m_fenceValues[c_swapBufferCount];
+	Microsoft::WRL::Wrappers::Event                     m_fenceEvent;
 
-    // Rendering resources
-    Microsoft::WRL::ComPtr<IDXGISwapChain3>             m_swapChain;
-    Microsoft::WRL::ComPtr<ID3D12Resource>              m_renderTargets[c_swapBufferCount];
-    Microsoft::WRL::ComPtr<ID3D12Resource>              m_depthStencil;
+	// Rendering resources
+	Microsoft::WRL::ComPtr<IDXGISwapChain3>             m_swapChain;
+	Microsoft::WRL::ComPtr<ID3D12Resource>              m_renderTargets[c_swapBufferCount];
+	Microsoft::WRL::ComPtr<ID3D12Resource>              m_depthStencil;
 
-    // Game state
-    DX::StepTimer                                       m_timer;
+	// Game state
+	DX::StepTimer                                       m_timer;
+
 
 	// imgui
 	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap>        g_pd3dSrvDescHeap;
+
+	// data to render - angles generated by MPU6050 accelerometer
+	float m_AngleRoll;
+	float m_AnglePitch;
+
+
+	// MPU6050 connection and reading
+	I2cDevice^ m_I2cMPU6050Device;
+	Threading::ThreadPoolTimer ^m_PeriodicTimer;
+	Platform::Array<byte> ^m_ReadRegAddr;
+	Platform::Array<byte> ^m_ReadBuf;
+	uint32 m_AccelerometerReads;	// count reads to calculate 'reads per secons'
+
+	// data produced by MPU6050 accelerometer
+	AccelData m_AccelData;
 
 };

@@ -8,12 +8,12 @@
 #include "imgui.h"
 #include "imgui_impl_dx12.h"
 
-
-extern void ExitGame();
-
+using Microsoft::WRL::ComPtr;
+using namespace Platform;
+using namespace Windows::Foundation;
 using namespace DirectX;
 
-using Microsoft::WRL::ComPtr;
+extern void ExitGame();
 
 Game::Game() :
     m_window(nullptr),
@@ -22,7 +22,8 @@ Game::Game() :
     m_outputRotation(DXGI_MODE_ROTATION_IDENTITY),
     m_featureLevel(D3D_FEATURE_LEVEL_11_0),
     m_backBufferIndex(0),
-    m_fenceValues{}
+    m_fenceValues{},
+	m_AccelerometerReads(0)
 {
 }
 
@@ -37,12 +38,81 @@ void Game::Initialize(IUnknown* window, int width, int height, DXGI_MODE_ROTATIO
     CreateDevice();
     CreateResources();
 
-    // TODO: Change the timer settings if you want something other than the default variable timestep mode.
-    // e.g. for 60 FPS fixed timestep update logic, call:
-    /*
-    m_timer.SetFixedTimeStep(true);
-    m_timer.SetTargetElapsedSeconds(1.0 / 60);
-    */
+	auto initMPU6050Task = InitMPU6050();
+
+	initMPU6050Task.then([this](bool _i2cDeviceFound) {
+
+		if (!_i2cDeviceFound)
+		{
+			return;	// I2C device not found. Quit.
+		}
+
+		// start periodical timer
+		TimeSpan timerPeriod;
+		timerPeriod.Duration = 40 * 10000; // read MPU6050 accelerometer data every 40 mS
+
+		unsigned char regAddrBuf[]{ 0x3B };	// MPU6050 read data register
+		unsigned char readBufChar[14];
+
+		m_ReadRegAddr = ref new Platform::Array<byte>(regAddrBuf, _countof(regAddrBuf));
+		m_ReadBuf = ref new Platform::Array<byte>(readBufChar, _countof(readBufChar));
+
+		m_PeriodicTimer = Threading::ThreadPoolTimer::CreatePeriodicTimer(
+			ref new Threading::TimerElapsedHandler(
+				[this](Threading::ThreadPoolTimer ^timer)
+		{
+			if (m_I2cMPU6050Device)
+			{
+
+				try
+				{
+					// 1) read MPU6050 sensor datadata
+					m_I2cMPU6050Device->WriteRead(m_ReadRegAddr, m_ReadBuf);
+
+					// 2) calculatoins
+					short AccelerationRawX = (short)(m_ReadBuf[0] * 256);
+					AccelerationRawX += (m_ReadBuf[1]);
+					short AccelerationRawY = (short)(m_ReadBuf[2] * 256);
+					AccelerationRawY += m_ReadBuf[3];
+					short AccelerationRawZ = (short)(m_ReadBuf[4] * 256);
+					AccelerationRawZ += m_ReadBuf[5];
+
+					short GyroRawX = (short)(m_ReadBuf[8] * 256);
+					GyroRawX += (m_ReadBuf[9]);
+					short GyroRawY = (short)(m_ReadBuf[10] * 256);
+					GyroRawY += m_ReadBuf[11];
+					short GyroRawZ = (short)(m_ReadBuf[12] * 256);
+					GyroRawZ += m_ReadBuf[13];
+
+					// accelerometer
+					// Convert raw accelerometer values to G's
+					const int ACCEL_RES = 32767;	// MPU6050 accelerometer dynamic range = 16 bits signed
+					const int ACCEL_DYN_RANGE_G = 2;	// use +/- 2g mode (see register 0x1C)
+					const int UNITS_PER_G = ACCEL_RES / ACCEL_DYN_RANGE_G;
+
+					// normalize accelerometer values to +/- 1.0
+					float accelX, accelY, accelZ;
+					accelX = (float)AccelerationRawX / UNITS_PER_G;
+					accelY = (float)AccelerationRawY / UNITS_PER_G;
+					accelZ = (float)AccelerationRawZ / UNITS_PER_G;
+
+					// 3) store values to render data
+					m_AccelData.accelX = accelX;
+					m_AccelData.accelY = accelY;
+					m_AccelData.accelZ = accelZ;
+
+					m_AccelerometerReads += 1;
+				}
+				catch (...)
+				{
+				}
+			}
+
+		})
+			, timerPeriod
+		);	// of CreatePeriodicTimer
+
+	});	// of initMPU6050Task 'then'
 }
 
 // Executes the basic game loop.
@@ -56,14 +126,19 @@ void Game::Tick()
     Render();
 }
 
+
+
 // Updates the world.
 void Game::Update(DX::StepTimer const& timer)
 {
     float elapsedTime = float(timer.GetElapsedSeconds());
 
-    // TODO: Add your game logic here.
-    elapsedTime;
+	// use MPU6050 accelerometer data in render
+	m_AngleRoll = m_AccelData.accelX;
+	m_AnglePitch = m_AccelData.accelY;
 }
+
+
 
 // Draws the scene.
 void Game::Render()
@@ -82,7 +157,7 @@ void Game::Render()
 	ImGui_ImplDX12_NewFrame(m_commandList.Get(), m_outputWidth, m_outputHeight);
 
 	constexpr float INFO_WINDOW_WIDTH = 340.0f;
-	constexpr float INFO_WINDOW_HEIGHT = 100.0f;
+	constexpr float INFO_WINDOW_HEIGHT = 120.0f;
 
 	// put debug window at center bottom position
 	ImGui::SetNextWindowPos(ImVec2((m_outputWidth - INFO_WINDOW_WIDTH) / 2, m_outputHeight - INFO_WINDOW_HEIGHT), ImGuiSetCond_FirstUseEver);
@@ -90,7 +165,10 @@ void Game::Render()
 
 	// put data to display
 	ImGui::Begin("Accelerometer");
-	ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
+	ImGui::Text("FPS=%.1f", ImGui::GetIO().Framerate);
+	ImGui::Text("Accelerometer reads per second %.1f", float(m_AccelerometerReads / m_timer.GetTotalSeconds()));
+	ImGui::SliderFloat("Roll angle", &m_AngleRoll, -1.0f, 1.0f);
+	ImGui::SliderFloat("Pitch angle", &m_AnglePitch, -1.0f, 1.0f);
 	ImGui::End();
 
 	// render debug window
@@ -555,4 +633,89 @@ void Game::OnDeviceLost()
 
     CreateDevice();
     CreateResources();
+}
+
+// write configuration register with I2C
+bool Game::WriteByteToI2C(I2cDevice^ _I2cMPU6050Device, byte _regAddr, byte _data)
+{
+	unsigned char writeBuf[]{ _regAddr, _data };
+	Platform::Array<byte> ^wb = ref new Platform::Array<byte>(writeBuf, _countof(writeBuf));
+
+	try
+	{
+		_I2cMPU6050Device->Write(wb);
+		return true;
+	}
+	catch (...)
+	{
+		return false;
+	}
+}
+
+// initialize MPU6050 device at I2C
+Concurrency::task<bool> Game::InitMPU6050()
+{
+	return Concurrency::create_task([this]()
+	{
+		String^ i2cDeviceSelector = I2cDevice::GetDeviceSelector();
+
+		return Concurrency::create_task(DeviceInformation::FindAllAsync(i2cDeviceSelector)).then([this](DeviceInformationCollection^ devices)
+		{
+			const unsigned int I2C_ADDRESS = 0x68;	// I2C address for MPU6050 sensor
+
+			if (devices->Size == 0)
+			{
+				return Concurrency::task_from_result(false);
+			}
+			else
+			{
+				auto HTU21D_settings = ref new I2cConnectionSettings(I2C_ADDRESS);
+
+				return Concurrency::create_task(I2cDevice::FromIdAsync(devices->GetAt(0)->Id, HTU21D_settings)).then([this](I2cDevice^ i2cDevice) {
+
+					if (i2cDevice)
+					{
+						m_I2cMPU6050Device = i2cDevice;	// save active I2C device
+
+						// init accelerometer
+						if (m_I2cMPU6050Device)
+						{
+							// see MPU-6000-Register-Map1.pdf for registers details
+
+							// init MPU6050
+							if (!WriteByteToI2C(m_I2cMPU6050Device, 0x6B, 0x80))
+							{
+								return false;
+							}
+							::Sleep(100);
+							if (!WriteByteToI2C(m_I2cMPU6050Device, 0x6B, 0x2))
+							{
+								return false;
+							}
+
+							if (!WriteByteToI2C(m_I2cMPU6050Device, 0x1A, 3))		// Accelerometer= 44Hz
+							{
+								return false;
+							}
+							if (!WriteByteToI2C(m_I2cMPU6050Device, 0x1C, 0))		// Accelerometer= +/- 2g
+							{
+								return false;
+							}
+						}
+						else
+						{
+							return false;
+						}
+
+						return true;
+					}
+					else
+					{
+						m_I2cMPU6050Device = nullptr;	// no I2C device found
+						return false;
+					}
+				});
+			}
+		});
+	});
 }
